@@ -4,7 +4,6 @@
 #include <Wire.h>
 #include "MAX30105.h"
 #include "spo2_algorithm.h"
-
 #include "BluetoothSerial.h"
 #include <string>
 
@@ -12,8 +11,10 @@ using namespace std;
 /******************************************************************************************************
  *                                       Defines                                                      *
  *****************************************************************************************************/
-#define BUFFER_LENGTH       11100
-#define MAX_BRIGHTNESS      255
+#define BUFFER_LENGTH         11300
+#define MAX_BRIGHTNESS        255
+#define CURRENT_READING_MSG   1
+#define HISTORY_MSG           2
 
 /******************************************************************************************************
  *                                      Typedefs                                                      *
@@ -30,6 +31,7 @@ typedef struct Readings
  *****************************************************************************************************/
 /********** Bluetooth object ************/
 BluetoothSerial SerialBT;
+boolean start = false;
 
 /********** Sensor variables ************/
 uint16_t bufferIndex=0;
@@ -86,6 +88,8 @@ void setup() {
  *****************************************************************************************************/
 void loop()
 {
+  /* Wait for the user to start the sensor */
+  while(!SerialBT.available()){}
   bufferLength = 100; /* buffer length of 100 stores 4 seconds of samples running at 25sps */
 
   /***************** Read frist 100 samples for range estimation *********************/
@@ -131,53 +135,79 @@ void loop()
     }
 
     /* After gathering 25 new samples recalculate HR and SP02 */
-     maxim_heart_rate_and_oxygen_saturation(irBuffer, bufferLength, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
-
-      /****************************  Save readings to the buffer ***************************/
-     if(heartRate != -999)
-     {
-     Serial.print(F(", HR="));
-     Serial.print(heartRate, DEC);
-     Serial.print(F(", spo2="));
-     Serial.println(spo2, DEC);
-     readings[bufferIndex].heartRate = (uint8_t) heartRate;
-     readings[bufferIndex].spO2 = (uint8_t) spo2;
-     readings[bufferIndex].sampleTime = millis();
-     }
-     else
-     {
+    maxim_heart_rate_and_oxygen_saturation(irBuffer, bufferLength, redBuffer, &spo2, &validSPO2, &heartRate, &validHeartRate);
+    
+    /****************************  Save readings to the buffer ***************************/
+    if(heartRate != -999)
+    {
+      Serial.print(F(", HR="));
+      Serial.print(heartRate, DEC);
+      Serial.print(F(", spo2="));
+      Serial.println(spo2, DEC);
+      readings[bufferIndex].heartRate = (uint8_t) heartRate;
+      readings[bufferIndex].spO2 = (uint8_t) spo2;
+      readings[bufferIndex].sampleTime = millis();
+    }
+    else
+    {
       Serial.println(F("wrong reading"));
-     }
-
-     /**************************** When connected to phone ********************************/
-     Serial.println(SerialBT.available());
-     Serial.println(bufferIndex);
-      if(SerialBT.available())
+    }
+    
+    /**************************** When connected to phone ********************************/
+    Serial.println(SerialBT.available());
+         
+    if(SerialBT.available())
+    {
+      uint8_t* pointer;
+      uint8_t converter[4];
+      if(firstConnection == true)   /* On first connection send the history of readings */
       {
-        if(firstConnection == true)   /* On first connection send the history of readings */
-        {
-          for(uint32_t i =0; i<=bufferIndex; i++)
-          {       
-            /* Print buffer to serial monitor */
-            Serial.print("Buffer: ");
-            Serial.println(readings[i].heartRate, DEC);
-
-            /* Send previous readings */
-            SerialBT.write(readings[i].heartRate);
-            SerialBT.write(readings[i].spO2);
-            SerialBT.write(readings[i].sampleTime);
-            
-          }
-          firstConnection = false;
+        for(uint32_t i =0; i<=bufferIndex; i++)
+        {       
+          pointer = (uint8_t*)&readings[i].sampleTime;
+          /* Endiannes swap */
+          converter[0] = pointer[3];
+          converter[1] = pointer[2];
+          converter[2] = pointer[1];
+          converter[3] = pointer[0];
+          /* Print buffer to serial monitor */
+          Serial.print("Buffer: ");
+          Serial.println(readings[i].heartRate, DEC);
+    
+          /* Send previous readings */
+          SerialBT.write(readings[i].heartRate);
+          SerialBT.write(readings[i].spO2);
+          SerialBT.write(converter[0]);
+          SerialBT.write(converter[1]);
+          SerialBT.write(converter[2]);
+          SerialBT.write(converter[3]);
+          SerialBT.write((uint8_t)HISTORY_MSG);
+          
         }
-        else                          /* After receiving all history keep sending current reading */
-        {
-          SerialBT.write(readings[bufferIndex].heartRate);
-          SerialBT.write(readings[bufferIndex].spO2);
-          SerialBT.write(readings[bufferIndex].sampleTime);
-        }
+        firstConnection = false;
       }
-      bufferIndex++;
-      if(bufferIndex >= BUFFER_LENGTH) bufferIndex = 0;
+      else                          /* After receiving all history keep sending current reading */
+      {
+        /* uint32 to uint8[4] converter */
+        pointer = (uint8_t*)&readings[bufferIndex].sampleTime;
+    
+        /* Endiannes swap */
+        converter[0] = pointer[3];
+        converter[1] = pointer[2];
+        converter[2] = pointer[1];
+        converter[3] = pointer[0];
+          
+        SerialBT.write(readings[bufferIndex].heartRate);
+        SerialBT.write(readings[bufferIndex].spO2);
+        SerialBT.write(converter[0]);
+        SerialBT.write(converter[1]);
+        SerialBT.write(converter[2]);
+        SerialBT.write(converter[3]);
+        SerialBT.write((uint8_t)CURRENT_READING_MSG);
+        Serial.println(readings[bufferIndex].sampleTime, DEC);
+      }
+    }
+    bufferIndex++;
+    if(bufferIndex >= BUFFER_LENGTH) bufferIndex = 0;
   }
 }

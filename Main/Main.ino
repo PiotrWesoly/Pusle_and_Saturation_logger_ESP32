@@ -17,6 +17,8 @@ using namespace std;
 #define HISTORY_MSG           2
 #define SENT                  1
 #define NOT_SENT              0
+#define CONNECTED             49
+#define NOT_CONNECTED         50
 
 /******************************************************************************************************
  *                                      Typedefs                                                      *
@@ -31,13 +33,13 @@ typedef struct Readings
 /******************************************************************************************************
  *                                      Global variables                                              *
  *****************************************************************************************************/
-/********** Bluetooth object ************/
+/********** Bluetooth  **************/
 BluetoothSerial SerialBT;
 boolean start = false;
+bool isHistorySent=false;
 
 /********** Sensor variables ************/
 uint16_t bufferIndex=0;
-bool firstConnection=true;
 
 /* Buffer allocation */
 Readings_struct readings[BUFFER_LENGTH];
@@ -70,7 +72,7 @@ void setup() {
     while (1);
   }
 
-  Serial.println(F("Attach sensor to finger with rubber band. Press any key to start conversion"));
+  Serial.println(F("Press any key to start conversion"));
   while (Serial.available() == 0) ; /* wait until user starts */
   Serial.read();
 
@@ -91,6 +93,7 @@ void setup() {
 void loop()
 {
   static int isSent[BUFFER_LENGTH] = {0};
+  int incoming;
   
   /* Wait for the user to start the sensor */
 //  while(!SerialBT.available()){}
@@ -166,37 +169,41 @@ void loop()
       Serial.println(F("wrong reading"));
     }
     
-    /**************************** When connected to phone ********************************/
-    Serial.println(SerialBT.available());
-         
+    /**************************** When connected to phone ********************************/   
     if(SerialBT.available())
+    {
+      incoming = SerialBT.read();
+    }
+
+      Serial.print(F(", incoming="));
+      Serial.println(incoming, DEC);
+      Serial.print(F(", isHistorySent="));
+      Serial.println(isHistorySent, DEC);
+
+    if(incoming == CONNECTED)
     {
       uint8_t* pointer;
       uint8_t converter[4];
       uint32_t currentMillis = millis();
-      if(firstConnection == true)   /* On first connection send the history of readings */
+      if(isHistorySent == false)   /* On new connection send history first */
       {
-        for(uint32_t i =0; i<=bufferIndex; i++)
+        Serial.println("History");
+        for(uint32_t i=0; i<=bufferIndex; i++)
         {
           if(isSent[i] == NOT_SENT)
           {
             timeOfRecord = currentMillis - readings[i].sampleTime;
-            Serial.print("currentMillis: ");
-            Serial.println(currentMillis);
-           Serial.print("sampletime: ");
-            Serial.println(readings[i].sampleTime);
-           Serial.print("curent-sample: ");
-            Serial.println(timeOfRecord);
-            
             pointer = (uint8_t*)&timeOfRecord;
+            
             /* Endiannes swap */
             converter[0] = pointer[3];
             converter[1] = pointer[2];
             converter[2] = pointer[1];
             converter[3] = pointer[0];
+            
             /* Print buffer to serial monitor */
-//            Serial.print("Buffer: ");
-//            Serial.println(readings[i].heartRate, DEC);
+              Serial.print("Buffer: ");
+              Serial.println(readings[i].heartRate, DEC);
       
             /* Send previous readings */
             SerialBT.write(readings[i].heartRate);
@@ -210,12 +217,15 @@ void loop()
             isSent[i] = SENT;
           }
         }
-        firstConnection = false;
+        isHistorySent = true;
       }
       else /* After receiving all history keep sending current reading */
       {
+        
+        timeOfRecord = currentMillis - readings[bufferIndex].sampleTime;
         /* uint32 to uint8[4] converter */
-        pointer = (uint8_t*)&readings[bufferIndex].sampleTime;
+  //        pointer = (uint8_t*)&readings[bufferIndex].sampleTime;
+        pointer = (uint8_t*)&timeOfRecord;
     
         /* Endiannes swap */
         converter[0] = pointer[3];
@@ -232,9 +242,14 @@ void loop()
         SerialBT.write((uint8_t)CURRENT_READING_MSG);
         Serial.println(readings[bufferIndex].sampleTime, DEC);
         isSent[bufferIndex] = SENT;
-        
       }
-    }
+   }
+   else 
+   {
+      Serial.println("else");
+     isHistorySent = false;
+   }
+    
     
     bufferIndex++;/* increment index */
 
